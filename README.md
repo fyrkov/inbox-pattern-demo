@@ -86,30 +86,18 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
 - **More moving parts.** A table, an ingest path, and a separate worker, versus "just handle the message in the consumer
   callback." Also the worker needs monitoring, scaling, and its own failure handling.
 
-## Gotchas
+## Other notes
 
-- **Status updates must be transactional with business writes.** If you process the event, write to your domain tables,
-  and update `status = done` in separate transactions, a crash in between leaves you in a lying state. Keep them in one
-  transaction.
-- **Idempotency still matters at the process step, not just ingest.** A worker can crash mid-processing and retry the
-  same `pending` row. The business logic itself must be safe to run twice, or be guarded by the same transaction that
-  flips the status.
-- **The inbox table needs pruning.** It is append-heavy and grows forever if you let it. Archive or delete old `done`
-  rows, or it becomes your largest, slowest table. Watch for bloat from high-churn updates.
-- **Worker polling can be wasteful or laggy.** Naive `select ... where status = 'pending'` polling either hammers the DB
-  or adds latency. Use `LISTEN/NOTIFY`, `SELECT ... FOR UPDATE SKIP LOCKED` for safe concurrent workers, or a sensible
-  poll interval.
-- **Ordering is not free.** If processing order matters, the worker must respect it (order by receipt, or partition by
-  key). A naive parallel worker pool can reorder events.
+- **Ordering + Parallelization is not free.** Unlike the built-in ordering guarantee within partitioned Kafka topics, a local pool of parallel workers can reorder events. Workers must keep per-entity order intact while still running in parallel.
 
 
 ## When to use it
 
-Reach for the inbox when:
+Think of the inbox when:
 
+- **You need self-service, fine-grained replay** of individual events without touching shared broker infrastructure.
 - **Processing is heavy, slow, or failure-prone** (calls external systems, long computations) and you don't want that
   coupled to broker consumption.
-- **You need self-service, fine-grained replay** of individual events without touching shared broker infrastructure.
 
 
 ## The one-line summary
