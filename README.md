@@ -1,7 +1,5 @@
 # The Inbox Pattern
 
-![kermit_inbox.png](kermit_inbox.png)
-
 The inbox pattern is the consumer-side mirror of the outbox pattern. Where the outbox guarantees that a service reliably
 *publishes* events, the inbox guarantees that a service reliably *processes* the events it receives - exactly once, in
 its own time, and on its own terms.
