@@ -12,11 +12,9 @@ and does the real work.
 
 So there are two decoupled phases:
 
-1. **Ingest** - capture the event durably, do nothing else.
-2. **Process** - act on the stored event, independently.
+1. **Ingest** - capture and store an event, do nothing else.
+2. **Process** - process the stored event, independently.
 
-The defining trait is the **local durable copy of the message**. Everything good about the pattern follows from owning
-that copy.
 
 ## How it works
 
@@ -24,7 +22,7 @@ A typical inbox table:
 
 ```sql
 create table inbox (
-  event_id     text primary key,                  -- idempotency key
+  event_id     text primary key,                   -- idempotency key
   payload      jsonb not null,                     -- the event, stored on receipt
   status       text not null default 'pending',    -- pending | done | failed
   received_at  timestamptz not null default now(),
@@ -40,9 +38,7 @@ insert into inbox (event_id, payload) values (:id, :payload)
 on conflict (event_id) do nothing;
 ```
 
-The `on conflict do nothing` is the deduplication: if the same event is delivered twice (and most brokers deliver
-at-least-once), the second insert is a harmless no-op. This step never runs business logic, so it never "gets stuck" -
-it just captures the event. The broker offset now only tracks *ingestion*.
+The `on conflict do nothing` is the deduplication: if the same event is delivered twice, the second insert is a no-op. This step never runs business logic, so it should never stuck -  it just captures the event.
 
 **Process** - a worker picks up pending rows and acts:
 
@@ -50,12 +46,19 @@ it just captures the event. The broker offset now only tracks *ingestion*.
 select * from inbox where status = 'pending' order by received_at limit 100;
 ```
 
-On success it sets `status = 'done'`, `processed_at = now()`. On failure it sets `status = 'failed'` and records the
-`error`. Processing the event and updating its status happen in the **same transaction** as any business writes, so
+This ofc course requires an index like:
+```
+craete index idx on inbox (received_at) where status = 'pending';
+```
+
+On success the worker sets `status = 'done'`. On failure it sets `status = 'failed'` and records the
+`error`. In both cases it also sets the `processed_at`. 
+
+❗ Processing the event and updating its status must happen in the **same transaction** as any business writes, so
 state and status can never disagree.
 
-**Replay** - the whole reason people love this pattern. Reprocessing a failed event is one statement in your own
-database:
+## Replay 
+Reprocessing a failed event is one simple statement in your own database:
 
 ```sql
 update inbox set status = 'pending', error = null where event_id = '...';
@@ -65,7 +68,7 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
 
 ## Pros
 
-- **Reliable, exactly-once processing.** The dedup key kills duplicate delivery; the same-transaction status update
+- **Reliable, exactly-once processing.** The dedup key takes care of duplicates; the same-transaction status update
   kills the "processed but crashed before acking" gap.
 - **Self-service replay.** Reprocess any event by flipping a column - the ergonomics of the classic polling outbox, on
   the consumer side.
@@ -80,13 +83,9 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
 
 ## Cons
 
-- **You store every payload.** This is a real cost - you've effectively rebuilt a queue inside your database, and it
-  grows with your event volume. You need a retention/archival policy for the inbox itself.
+- **You store every payload.** The inbox table is ;arger comparing to storing only dedup keys and grows with the event volume. You need a retention/archival policy for it.
 - **More moving parts.** A table, an ingest path, and a separate worker, versus "just handle the message in the consumer
-  callback."
-- **Added latency.** Events now go through a write-then-poll cycle instead of being processed inline. Usually
-  milliseconds, but it's not zero.
-- **The worker is another thing to operate.** It needs monitoring, scaling, and its own failure handling.
+  callback." Also the worker needs monitoring, scaling, and its own failure handling.
 
 ## Gotchas
 
@@ -103,8 +102,7 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
   poll interval.
 - **Ordering is not free.** If processing order matters, the worker must respect it (order by receipt, or partition by
   key). A naive parallel worker pool can reorder events.
-- **It is not a substitute for deduplication upstream.** The `event_id` must be a stable, meaningful key from the
-  producer. A random per-delivery id defeats the whole dedup mechanism.
+
 
 ## When to use it
 
@@ -113,16 +111,7 @@ Reach for the inbox when:
 - **Processing is heavy, slow, or failure-prone** (calls external systems, long computations) and you don't want that
   coupled to broker consumption.
 - **You need self-service, fine-grained replay** of individual events without touching shared broker infrastructure.
-- **You need to replay beyond broker retention**, or want a durable local audit trail of everything received.
-- **Exactly-once side effects matter** - payments, ledgers, anything where double-processing is expensive.
 
-Skip it when:
-
-- **Processing is cheap, fast, and naturally idempotent** - then a plain idempotent consumer (just store dedup keys, let
-  the broker manage offsets) is leaner and enough.
-- **You don't need local replay or an audit trail**, and broker-side offset resets are easy in your environment.
-- **Storage or operational simplicity is at a premium** and the volume is high - copying every payload may not be worth
-  it.
 
 ## The one-line summary
 
