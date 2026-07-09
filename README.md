@@ -70,8 +70,7 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
 
 - **Reliable, exactly-once processing.** The dedup key takes care of duplicates; the same-transaction status update
   kills the "processed but crashed before acking" gap.
-- **Self-service replay.** Reprocess any event by flipping a column - the ergonomics of the classic polling outbox, on
-  the consumer side.
+- **Self-service replay.** Reprocess any event by updating a column in local DB. No dependency on the Kafka broker offset reset operation.
 - **Decoupled ingestion from processing.** A slow or failing downstream never backs up your broker consumption. You
   ingest fast, process at your own pace, retry on your own schedule.
 - **Independent of broker retention.** Because you own the payload, you can replay events long after they've aged out of
@@ -83,7 +82,7 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
 
 ## Cons
 
-- **You store every payload.** The inbox table is ;arger comparing to storing only dedup keys and grows with the event volume. You need a retention/archival policy for it.
+- **More storage.** The inbox table contains payloads and therefore is larger comparing to storing only dedup keys. It grows with the event volume and needs a partitioning/retention/archival policy.
 - **More moving parts.** A table, an ingest path, and a separate worker, versus "just handle the message in the consumer
   callback." Also the worker needs monitoring, scaling, and its own failure handling.
 
