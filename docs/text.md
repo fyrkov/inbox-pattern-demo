@@ -90,8 +90,7 @@ The worker re-picks it on its next pass. No broker, no offset reset, no infrastr
 
 ## Other notes
 
-- **Ordering + Parallelization is not free.** Unlike the built-in ordering guarantee within partitioned Kafka topics, a local pool of parallel workers can reorder events. Workers must keep per-entity order intact while still running in parallel.
-
+- **Ordering + Parallelization is not free.** Unlike the built-in ordering guarantee within partitioned Kafka topics, a local pool of parallel workers can reorder events. If several workers run in paralell, they must keep per-entity order intact.
 
 ## When to use it
 
